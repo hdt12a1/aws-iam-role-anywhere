@@ -135,6 +135,269 @@ The `credential-process` command performs several essential functions:
 - **`--intermediate-certificates`**: Path to intermediate certificates if needed for chain validation
 - **`--passphrase`**: Passphrase for encrypted private key
 
+##### Understanding IAM Role Anywhere Endpoints
+
+The `--endpoint-url` parameter allows you to specify which IAM Role Anywhere endpoint to connect to. This is particularly important for:
+
+1. **Regional Endpoints**: IAM Role Anywhere has region-specific endpoints
+2. **VPC Endpoints**: When accessing IAM Role Anywhere through a VPC endpoint
+3. **Testing/Development**: When using custom endpoints for testing
+4. **FIPS Endpoints**: When compliance requires FIPS-validated endpoints
+
+###### Standard Regional Endpoints
+
+IAM Role Anywhere is available in most AWS regions. The standard endpoint format is:
+
+```
+rolesanywhere.{region}.amazonaws.com
+```
+
+Examples:
+- `rolesanywhere.us-east-1.amazonaws.com` (US East - N. Virginia)
+- `rolesanywhere.eu-west-1.amazonaws.com` (Europe - Ireland)
+- `rolesanywhere.ap-southeast-1.amazonaws.com` (Asia Pacific - Singapore)
+
+###### FIPS Endpoints
+
+For workloads that require FIPS 140-2 validated cryptographic modules, use FIPS endpoints:
+
+```
+rolesanywhere-fips.{region}.amazonaws.com
+```
+
+Example:
+```bash
+aws_signing_helper credential-process \
+  --endpoint-url https://rolesanywhere-fips.us-east-1.amazonaws.com \
+  # other parameters
+```
+
+###### VPC Endpoints
+
+If you're using AWS PrivateLink to access IAM Role Anywhere via a VPC endpoint:
+
+```bash
+aws_signing_helper credential-process \
+  --endpoint-url https://vpce-{vpce-id}.rolesanywhere.{region}.vpce.amazonaws.com \
+  # other parameters
+```
+
+###### How Traffic Routing Works with VPC Endpoints
+
+When you create a VPC endpoint for IAM Role Anywhere, it changes how network traffic is routed:
+
+```mermaid
+flowchart LR
+    subgraph "Without VPC Endpoint (Default)"
+        direction LR
+        A1[On-premises/
+Hybrid Workload] --> B1[Internet
+Gateway]
+        B1 --> C1[Public
+Internet]
+        C1 --> D1[AWS Public Endpoint
+rolesanywhere.region.amazonaws.com]
+        D1 --> E1[IAM Role
+Anywhere Service]
+        
+        A2[Other AWS
+Service Requests] --> B1
+        B1 --> C1
+        C1 --> F1[Other AWS
+Public Endpoints]
+    end
+    
+    subgraph "With VPC Endpoint"
+        direction LR
+        A3[On-premises/
+Hybrid Workload] --> B3{Traffic
+Destination?}
+        B3 -->|IAM Role
+Anywhere| C3[VPC Endpoint for
+IAM Role Anywhere]
+        C3 --> D3[AWS PrivateLink]
+        D3 --> E3[IAM Role
+Anywhere Service]
+        
+        B3 -->|Other AWS
+Services| F3[Internet
+Gateway]
+        F3 --> G3[Public
+Internet]
+        G3 --> H3[Other AWS
+Public Endpoints]
+        
+        B3 -->|General
+Internet| F3
+        F3 --> G3
+        G3 --> I3[Internet
+Destinations]
+    end
+```
+
+1. **Without VPC Endpoint (Default)**:
+   - Traffic from your workload to IAM Role Anywhere follows this path:
+     - Workload → Internet Gateway → Public Internet → AWS Public Endpoint
+   - Requires internet access for your workloads
+   - Uses public DNS resolution for `rolesanywhere.{region}.amazonaws.com`
+
+2. **With VPC Endpoint**:
+   - Traffic from your workload to IAM Role Anywhere follows this path:
+     - Workload → VPC Endpoint (in your VPC) → AWS PrivateLink → IAM Role Anywhere Service
+   - Stays entirely within the AWS network
+   - Uses either the endpoint-specific DNS name or the standard service DNS name (if private DNS is enabled)
+
+3. **Traffic Routing Control**:
+   - **Only IAM Role Anywhere Traffic**: The VPC endpoint only affects traffic destined for the IAM Role Anywhere service
+   - **Other AWS Services**: Not affected unless you create separate VPC endpoints for them
+   - **Internet Traffic**: Other internet-bound traffic still uses your normal internet gateway or NAT gateway
+
+4. **DNS Resolution**:
+   - With private DNS enabled (default): Requests to `rolesanywhere.{region}.amazonaws.com` automatically route through the VPC endpoint
+   - Without private DNS: You must explicitly use the endpoint-specific URL: `vpce-{id}.rolesanywhere.{region}.vpce.amazonaws.com`
+
+5. **Selective Routing**:
+   - You can choose which workloads use the VPC endpoint by:
+     - Network access controls (security groups, NACLs)
+     - Explicitly configuring some workloads to use the public endpoint and others to use the VPC endpoint
+     - Using endpoint policies to restrict which IAM principals can use the endpoint
+
+###### Detailed Network Flow Comparison
+
+```mermaid
+sequenceDiagram
+    participant W as Workload
+    participant VPC as VPC Resources
+    participant IGW as Internet Gateway
+    participant VPCE as VPC Endpoint
+    participant INT as Public Internet
+    participant PL as AWS PrivateLink
+    participant AWS as IAM Role Anywhere Service
+    
+    Note over W,AWS: Without VPC Endpoint
+    W->>VPC: Request to rolesanywhere.region.amazonaws.com
+    VPC->>IGW: Route traffic to internet
+    IGW->>INT: Send through public internet
+    INT->>AWS: Reach AWS public endpoint
+    AWS->>INT: Return response
+    INT->>IGW: Return through internet
+    IGW->>VPC: Route to VPC
+    VPC->>W: Deliver response
+    
+    Note over W,AWS: With VPC Endpoint (Private DNS Enabled)
+    W->>VPC: Request to rolesanywhere.region.amazonaws.com
+    VPC->>VPCE: DNS resolves to VPC endpoint
+    VPCE->>PL: Route through PrivateLink
+    PL->>AWS: Direct private connection
+    AWS->>PL: Return response
+    PL->>VPCE: Through PrivateLink
+    VPCE->>VPC: Within VPC
+    VPC->>W: Deliver response
+    
+    Note over W,AWS: With VPC Endpoint (Other AWS Traffic)
+    W->>VPC: Request to other-service.amazonaws.com
+    VPC->>IGW: No VPC endpoint for this service
+    IGW->>INT: Send through public internet
+    INT->>AWS: Reach other AWS service
+```
+
+###### Why Use VPC Endpoints with IAM Role Anywhere
+
+VPC endpoints for IAM Role Anywhere provide several critical benefits for enterprise and security-focused environments:
+
+1. **Enhanced Security**
+   - **Private Network Path**: Traffic between your workloads and IAM Role Anywhere stays within the AWS network and never traverses the public internet
+   - **Network Isolation**: Workloads in private subnets without internet access can still authenticate to AWS
+   - **Reduced Attack Surface**: Eliminates exposure to internet-based threats and DDoS attacks
+
+2. **Compliance Requirements**
+   - **Data Sovereignty**: Helps meet regulatory requirements that mandate data must not traverse the public internet
+   - **Audit Controls**: Provides additional network-level audit points for compliance frameworks
+   - **Security Boundaries**: Creates clear network boundaries for security certification requirements
+
+3. **Network Performance and Reliability**
+   - **Reduced Latency**: Direct connection to AWS services without internet routing
+   - **Bandwidth Predictability**: Avoids internet congestion issues
+   - **Connection Stability**: More reliable connections without internet-related disruptions
+
+4. **Cost Optimization**
+   - **Reduced NAT Gateway Costs**: Eliminates the need to route traffic through NAT gateways for private subnets
+   - **Bandwidth Savings**: No charges for data transfer to the internet
+
+###### Common Use Cases for VPC Endpoints with IAM Role Anywhere
+
+1. **Hybrid Cloud with Private Connectivity**
+   - On-premises workloads connected to AWS via Direct Connect or VPN can access IAM Role Anywhere without internet exposure
+   - Example: Enterprise applications in corporate data centers authenticating to AWS services
+
+2. **Highly Regulated Environments**
+   - Financial, healthcare, and government workloads that must maintain strict network isolation
+   - Example: Healthcare applications processing PHI (Protected Health Information) that need AWS access
+
+3. **Air-Gapped or Internet-Restricted Environments**
+   - Environments with no direct internet access for security reasons
+   - Example: Manufacturing control systems or critical infrastructure that need AWS services
+
+4. **Multi-Account AWS Architectures**
+   - Centralized authentication services in a dedicated AWS account accessed by workloads in other accounts
+   - Example: Shared services VPC providing IAM Role Anywhere access to workloads in application VPCs
+
+###### Implementation Steps for VPC Endpoints
+
+1. **Create the VPC Endpoint**
+   ```bash
+   aws ec2 create-vpc-endpoint \
+     --vpc-id vpc-12345678 \
+     --service-name com.amazonaws.{region}.rolesanywhere \
+     --vpc-endpoint-type Interface \
+     --subnet-ids subnet-12345678 subnet-87654321 \
+     --security-group-ids sg-12345678
+   ```
+
+2. **Configure DNS Resolution**
+   - Enable private DNS for the endpoint to use the standard service DNS name
+   - Or configure custom DNS to resolve the VPC endpoint DNS name
+
+3. **Update Security Groups**
+   - Allow HTTPS (TCP port 443) traffic from your workloads to the VPC endpoint
+
+4. **Configure the Credential Helper**
+   - Use the VPC endpoint URL with the `aws_signing_helper` as shown above
+
+###### Security Considerations for VPC Endpoints
+
+1. **Endpoint Policies**: Apply IAM policies to your VPC endpoint to control which principals can use the endpoint
+
+2. **Security Groups**: Restrict access to the VPC endpoint using security groups
+
+3. **Private DNS**: Consider the implications of enabling or disabling private DNS for the endpoint
+
+4. **Logging and Monitoring**: Enable VPC Flow Logs to monitor traffic to and from the endpoint
+
+###### Dual-stack Endpoints
+
+For IPv6 support, use dual-stack endpoints:
+
+```
+rolesanywhere.{region}.api.aws
+```
+
+###### Global vs. Regional Considerations
+
+Unlike some AWS services, IAM Role Anywhere does not have a global endpoint. You must use the regional endpoint where your trust anchors and profiles are defined.
+
+###### Endpoint Configuration Best Practices
+
+1. **Region Consistency**: Ensure the region in your endpoint matches the region where your trust anchors and profiles are created
+
+2. **Failover Strategy**: For high availability, implement logic to try alternative regional endpoints if your primary endpoint is unavailable
+
+3. **Network Access**: Ensure your network allows outbound connections to the IAM Role Anywhere endpoints (port 443/HTTPS)
+
+4. **Endpoint Verification**: For security-critical applications, consider implementing TLS certificate pinning for the IAM Role Anywhere endpoints
+
+5. **Monitoring**: Set up monitoring for endpoint connectivity to detect issues early
+
 ##### Using Passphrase-Protected Private Keys
 
 If you created your certificate and private key with a passphrase (using the `-passin` option with OpenSSL), you **must** provide this passphrase to the `aws_signing_helper` using the `--passphrase` parameter:
