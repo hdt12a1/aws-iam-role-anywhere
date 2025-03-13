@@ -28,6 +28,20 @@ IAM Role Anywhere relies on X.509 certificates for authentication. These certifi
 
 A trust anchor in IAM Role Anywhere represents a Certificate Authority (CA) that you register with the service. This CA is used to validate the X.509 certificates presented by your workloads when requesting temporary credentials.
 
+#### Creating a Trust Anchor Certificate Bundle
+
+A trust anchor certificate bundle is a collection of certificates that establish the chain of trust for IAM Role Anywhere. It's used to validate the X.509 certificates presented by your workloads.
+
+For detailed step-by-step instructions on creating a trust anchor certificate bundle, see the dedicated guide: [Creating a Trust Anchor Certificate Bundle](./trust-anchor-creation.md)
+
+The guide covers three approaches:
+
+1. **Using AWS Private CA** - Leveraging AWS's managed certificate authority service
+2. **Using OpenSSL (Self-managed CA)** - Creating your own certificate authority infrastructure
+3. **Using an Existing Enterprise PKI** - Working with your organization's existing PKI solution
+
+It also includes instructions for verifying your certificate bundle and registering it with IAM Role Anywhere.
+
 #### Detailed Trust Anchor Explanation
 
 Trust anchors are a fundamental component of IAM Role Anywhere's security model. They establish the root of trust for the certificate validation process. Here's a more detailed explanation:
